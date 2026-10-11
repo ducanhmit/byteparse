@@ -381,6 +381,7 @@ class Array(Field):
     def _parse_one(self, r: Reader, ctx: Context, items: list[Any]) -> bool:
         """Parse one element into items; return True if `until` matched it."""
         start = r.tell()
+        item: Any = None
         parsed = False
         try:
             item = self.element.parse(r, ctx)
