@@ -346,10 +346,19 @@ class Array(Field):
     def parse(self, r: Reader, ctx: Context) -> tuple[Any, ...]:
         limit = r.limits.max_items
         items: list[Any] = []
+        fast = None
+        struct_cls: Any = None
+        if isinstance(self.element, StructField) and r.depth < r.limits.max_depth:
+            struct_cls = self.element.struct_cls
+            fast = struct_cls._bp_fast
         if self.count is not None:
             n = resolve_size(self.count, ctx, "array count")
             if n > limit:
                 raise LimitError(f"array count {n} exceeds max_items {limit}")
+            if fast is not None:
+                data = r.try_read(n * fast.size)
+                if data is not None:
+                    return tuple(fast.make_many(struct_cls, data))
             for _ in range(n):
                 self._parse_one(r, ctx, items)
         elif self.until is not None:
@@ -360,6 +369,10 @@ class Array(Field):
                 if call_user(self.until, item, what="until"):
                     break
         else:
+            left = r.remaining()
+            if fast is not None and left is not None and left % fast.size == 0:
+                if left // fast.size <= limit:
+                    return tuple(fast.make_many(struct_cls, r.read(left)))
             while not r.at_end():
                 if len(items) >= limit:
                     raise LimitError(f"array exceeds max_items {limit}")

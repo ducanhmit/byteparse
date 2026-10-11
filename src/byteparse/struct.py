@@ -3,16 +3,26 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import sys
-from typing import IO, Any, ClassVar, Literal, Self, dataclass_transform
+from typing import IO, Any, ClassVar, Literal, Self, cast, dataclass_transform
 
 from . import specifiers as sp
 from .errors import DefinitionError, ParseError, Partial
 from .fields import Bits, Field, Padding, StructField
-from .plan import Step, build_steps
+from .plan import FastLayout, Step, build_steps, fast_layout
 from .reader import BufferReader, Limits, Reader, StreamReader
 from .refs import Context
 
 _DEFAULT = Limits()
+
+
+def _limits(max_field_bytes: int, max_items: int, max_depth: int) -> Limits:
+    if (max_field_bytes, max_items, max_depth) == (
+        _DEFAULT.max_field_bytes,
+        _DEFAULT.max_items,
+        _DEFAULT.max_depth,
+    ):
+        return _DEFAULT
+    return Limits(max_field_bytes, max_items, max_depth)
 
 
 def _annotations(cls: type) -> dict[str, Any]:
@@ -93,6 +103,7 @@ class Struct:
     _bp_steps: ClassVar[list[Step]] = []
     _bp_padding: ClassVar[frozenset[str]] = frozenset()
     _bp_bits_only: ClassVar[bool] = False
+    _bp_fast: ClassVar[FastLayout | None] = None
 
     def __init_subclass__(
         cls, *, endian: Literal["big", "little"] | None = None, **kwargs: Any
@@ -119,7 +130,12 @@ class Struct:
         max_items: int = _DEFAULT.max_items,
         max_depth: int = _DEFAULT.max_depth,
     ) -> Self:
-        limits = Limits(max_field_bytes, max_items, max_depth)
+        fast = cls._bp_fast
+        if fast is not None and max_depth > 0 and isinstance(data, (bytes, bytearray)):
+            n = len(data)
+            if n == fast.size or (allow_trailing and n > fast.size):
+                return cast(Self, fast.make_from(cls, data))
+        limits = _limits(max_field_bytes, max_items, max_depth)
         return cls._bp_run(BufferReader(data, limits), check_trailing=not allow_trailing)
 
     @classmethod
@@ -131,13 +147,13 @@ class Struct:
         max_items: int = _DEFAULT.max_items,
         max_depth: int = _DEFAULT.max_depth,
     ) -> Self:
-        limits = Limits(max_field_bytes, max_items, max_depth)
+        limits = _limits(max_field_bytes, max_items, max_depth)
         return cls._bp_run(StreamReader(stream, limits), check_trailing=False)
 
     @classmethod
-    def _bp_run(cls, r: Reader, *, check_trailing: bool) -> Self:
+    def _bp_run(cls, r: Reader, *, check_trailing: bool, steps: list[Step] | None = None) -> Self:
         try:
-            obj = cls._bp_parse(r, None)
+            obj = cls._bp_parse(r, None, steps)
             if check_trailing:
                 left = r.remaining()
                 if left:
@@ -150,12 +166,17 @@ class Struct:
         return obj
 
     @classmethod
-    def _bp_parse(cls, r: Reader, parent: Context | None) -> Self:
+    def _bp_parse(cls, r: Reader, parent: Context | None, steps: list[Step] | None = None) -> Self:
+        fast = cls._bp_fast
+        if steps is None and fast is not None and r.depth < r.limits.max_depth:
+            data = r.try_read(fast.size)
+            if data is not None:
+                return cast(Self, fast.make(cls, data))
         r.enter()
         values: dict[str, Any] = {}
         ctx = Context(values, parent)
         try:
-            for step in cls._bp_steps:
+            for step in steps if steps is not None else cls._bp_steps:
                 step.run(r, ctx, values)
         except ParseError as e:
             shown = {k: v for k, v in values.items() if k not in cls._bp_padding}
@@ -165,7 +186,9 @@ class Struct:
             raise
         finally:
             r.leave()
-        return cls(**values)
+        obj = object.__new__(cls)
+        obj.__dict__.update(values)
+        return obj
 
     def _bp_values(self) -> dict[str, Any]:
         return {n: getattr(self, n) for n, _ in self._bp_fields if n not in self._bp_padding}
@@ -232,4 +255,5 @@ def _build(cls: type[Struct], endian: str | None) -> None:
     cls._bp_field_map = field_map
     cls._bp_steps = steps
     cls._bp_padding = frozenset(padding)
+    cls._bp_fast = fast_layout(fields)
     dataclasses.dataclass(frozen=True, kw_only=True)(cls)
