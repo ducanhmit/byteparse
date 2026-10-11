@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "byteparse"
+version = "0.1.0"
+description = "Typed, safe, declarative binary parsing for Python"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Duc Anh Luu" }]
+dependencies = []
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Libraries",
+    "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "hypothesis>=6.100",
+    "mypy>=1.11",
+    "pyright>=1.1.380",
+    "ruff>=0.6",
+    "construct>=2.10",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/byteparse"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.mypy]
+strict = true
+warn_unused_ignores = true
+files = ["src", "tests/typing"]
+
+[tool.pyright]
+include = ["src", "tests/typing"]
+pythonVersion = "3.11"
+reportUnnecessaryTypeIgnoreComment = "error"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E731"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B015", "B018"]
