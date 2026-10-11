@@ -105,3 +105,32 @@ def test_stream_with_short_reads():
     assert r.try_read(5) is None
     assert r.read(2) == b"ef"
     assert r.at_end()
+
+
+def test_stream_pushback_does_not_make_parsing_quadratic():
+    import time
+
+    import byteparse as bp
+    from byteparse import this
+
+    class Rec(bp.Struct, endian="big"):
+        v: int = bp.u32()
+
+    class Msg(bp.Struct, endian="big"):
+        count: int = bp.u32()
+        recs: tuple[Rec, ...] = bp.array(Rec, this.count)
+
+    def cost(n: int) -> float:
+        # One byte short: the bulk read fails, pushes everything back, and
+        # the elements are then parsed one by one from the pushed-back bytes.
+        data = n.to_bytes(4, "big") + bytes(4 * n - 1)
+        best = float("inf")
+        for _ in range(3):
+            t = time.perf_counter()
+            with pytest.raises(bp.ParseError):
+                Msg.parse_stream(io.BytesIO(data))
+            best = min(best, time.perf_counter() - t)
+        return best
+
+    # Linear work grows ~4x for 4x the input; the quadratic bug grew ~16x.
+    assert cost(200_000) / cost(50_000) < 8

@@ -143,15 +143,21 @@ class StreamReader(Reader):
     def __init__(self, stream: IO[bytes], limits: Limits) -> None:
         super().__init__(limits)
         self._stream = stream
+        # Pushed-back bytes are read through an index so each read copies only
+        # what it returns, not the whole pushed-back buffer.
         self._pending = b""
+        self._pi = 0
 
     def _source_remaining(self) -> None:
         return None
 
     def _take(self, n: int) -> bytes:
-        parts = [self._pending[:n]]
-        self._pending = self._pending[n:]
-        got = len(parts[0])
+        head = self._pending[self._pi : self._pi + n]
+        self._pi += len(head)
+        if self._pi == len(self._pending):
+            self._pending, self._pi = b"", 0
+        parts = [head]
+        got = len(head)
         while got < n:
             chunk = self._stream.read(min(n - got, _CHUNK))
             if not chunk:
@@ -162,5 +168,10 @@ class StreamReader(Reader):
         return b"".join(parts)
 
     def _untake(self, data: bytes) -> None:
-        self._pending = data + self._pending
-        self.pos -= len(data)
+        k = len(data)
+        if k <= self._pi and self._pending[self._pi - k : self._pi] == data:
+            self._pi -= k
+        else:
+            self._pending = data + self._pending[self._pi :]
+            self._pi = 0
+        self.pos -= k
