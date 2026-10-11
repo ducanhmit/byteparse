@@ -3,7 +3,7 @@ from __future__ import annotations
 import dataclasses
 import inspect
 import sys
-from typing import IO, Any, ClassVar, Literal, Self, cast, dataclass_transform
+from typing import IO, Any, ClassVar, ForwardRef, Literal, Self, cast, dataclass_transform
 
 from . import specifiers as sp
 from .errors import DefinitionError, ParseError, Partial
@@ -36,9 +36,20 @@ def _annotations(cls: type) -> dict[str, Any]:
         raise
 
 
-def _resolve_type(annotation: Any, cls: type) -> Any:
-    if not isinstance(annotation, str):
+def _annotation_text(annotation: Any) -> str | None:
+    """Source text of a string or ForwardRef annotation, else None."""
+    if isinstance(annotation, str):
         return annotation
+    if isinstance(annotation, ForwardRef):
+        return annotation.__forward_arg__
+    return None
+
+
+def _resolve_type(annotation: Any, cls: type) -> Any:
+    text = _annotation_text(annotation)
+    if text is None:
+        return annotation
+    annotation = text
     module = sys.modules.get(cls.__module__)
     namespace = dict(vars(module)) if module else {}
     namespace.update(vars(cls))
@@ -221,9 +232,10 @@ def _build(cls: type[Struct], endian: str | None) -> None:
             field = spec
         elif spec is dataclasses.MISSING:
             typ = _resolve_type(annotation, cls)
-            if typ is None and isinstance(annotation, str):
+            text = _annotation_text(annotation)
+            if typ is None and text is not None:
                 raise DefinitionError(
-                    f"{where}: cannot resolve annotation {annotation!r}; nested structs must be "
+                    f"{where}: cannot resolve annotation {text!r}; nested structs must be "
                     "defined before use, at module level when using "
                     "`from __future__ import annotations`"
                 )
