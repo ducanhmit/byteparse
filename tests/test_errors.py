@@ -66,3 +66,29 @@ def test_exception_hierarchy():
     assert issubclass(bp.ParseError, bp.ByteparseError)
     assert issubclass(bp.DefinitionError, bp.ByteparseError)
     assert not issubclass(bp.DefinitionError, bp.ParseError)
+
+
+def test_until_callback_error_names_the_element():
+    class U(bp.Struct):
+        items: tuple[int, ...] = bp.array(bp.u8(), until=lambda v: {5: False, 4: False}[v])
+
+    with pytest.raises(bp.ParseError) as exc:
+        U.parse(bytes([5, 4, 3, 9]))
+    e = exc.value
+    assert (e.path, e.offset) == (("items", 2), 2)
+    assert "until raised KeyError" in e.reason
+    assert e.partial["items"] == (5, 4, 3)
+
+
+def test_greedy_zero_size_error_names_the_element():
+    class Empty(bp.Struct):
+        nothing: bytes = bp.bytes(0)
+
+    class G(bp.Struct):
+        lead: int = bp.u8()
+        items: tuple[Empty, ...] = bp.array(Empty, greedy=True)
+
+    with pytest.raises(bp.ParseError, match="consumed no bytes") as exc:
+        G.parse(b"\x01\x02")
+    assert (exc.value.path, exc.value.offset) == (("items", 0), 1)
+    assert exc.value.partial["items"] == (Empty(nothing=b""),)

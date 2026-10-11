@@ -22,6 +22,7 @@ class Reader:
         self.limits = limits
         self.pos = 0
         self.depth = 0
+        self.empty_items = 0
         self._ends: list[int] = []
 
     def tell(self) -> int:

@@ -59,3 +59,18 @@ def test_max_depth():
     with pytest.raises(bp.LimitError, match="max_depth 2") as exc:
         Top.parse(b"\x01", max_depth=2)
     assert exc.value.path == ("mid", "leaf")
+
+
+def test_nested_zero_size_elements_are_bounded():
+    class Table(bp.Struct, endian="big"):
+        nsec: int = bp.u16()
+        nent: int = bp.u32()
+        entsize: int = bp.u16()
+        sections: tuple[tuple[bytes, ...], ...] = bp.array(
+            bp.array(bp.bytes(this.entsize), this.nent), this.nsec
+        )
+
+    hostile = (100).to_bytes(2, "big") + (1000).to_bytes(4, "big") + b"\0\0"
+    with pytest.raises(bp.LimitError, match="more than 5000 zero-size array elements"):
+        Table.parse(hostile, max_items=5000)
+    assert len(Table.parse(hostile, max_items=100_100).sections) == 100

@@ -365,8 +365,7 @@ class Array(Field):
             while True:
                 if len(items) >= limit:
                     raise LimitError(f"array exceeds max_items {limit}")
-                item = self._parse_one(r, ctx, items)
-                if call_user(self.until, item, what="until"):
+                if self._parse_one(r, ctx, items):
                     break
         else:
             left = r.remaining()
@@ -376,23 +375,35 @@ class Array(Field):
             while not r.at_end():
                 if len(items) >= limit:
                     raise LimitError(f"array exceeds max_items {limit}")
-                start = r.tell()
                 self._parse_one(r, ctx, items)
-                if r.tell() == start:
-                    raise ParseError("greedy array element consumed no bytes", offset=start)
         return tuple(items)
 
-    def _parse_one(self, r: Reader, ctx: Context, items: list[Any]) -> Any:
+    def _parse_one(self, r: Reader, ctx: Context, items: list[Any]) -> bool:
+        """Parse one element into items; return True if `until` matched it."""
         start = r.tell()
+        parsed = False
         try:
             item = self.element.parse(r, ctx)
+            parsed = True
+            if r.tell() == start:
+                if self.greedy:
+                    raise ParseError("greedy array element consumed no bytes")
+                # Zero-size elements cost time without consuming input, so nested
+                # arrays of them are bounded per parse, not per array.
+                r.empty_items += 1
+                limit = r.limits.max_items
+                if r.empty_items > limit:
+                    raise LimitError(f"more than {limit} zero-size array elements in this parse")
+            stop = self.until is not None and bool(call_user(self.until, item, what="until"))
         except ParseError as e:
-            child = (e.partial,) if e.partial is not None else ()
-            e.partial = (*items, *child)
+            if parsed:
+                e.partial = (*items, item)
+            else:
+                e.partial = (*items, *((e.partial,) if e.partial is not None else ()))
             prepend(e, len(items), start)
             raise
         items.append(item)
-        return item
+        return stop
 
 
 class If(Field):
